@@ -1,3 +1,4 @@
+.idea
 /webapp/*
 !/webapp/go/
 !/webapp/fixture/
