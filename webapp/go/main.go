@@ -880,7 +880,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	var ids []string
+	var ids []int64
 	dwh := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Height), 2))
 	dwd := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Depth), 2))
 	dhd := int(math.Pow(float64(chair.Height), 2) + math.Pow(float64(chair.Depth), 2))
@@ -906,11 +906,11 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	fmt.Println("new query: ", len(estates))
-	ids = make([]string, 0)
+	ids = make([]int64, 0)
 	for _, e := range estates {
-		ids = append(ids, string(e.ID))
+		ids = append(ids, e.ID)
 	}
-	fmt.Println("new query ids: ", strings.Join(ids, ","))
+	fmt.Println("new query ids: ", ids)
 	estates = make([]Estate, 0)
 
 	w := chair.Width
@@ -926,11 +926,11 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	fmt.Println("old query: ", len(estates))
-	idss := make([]string, 0)
+	idss := make([]int64, 0)
 	for _, e := range estates {
-		idss = append(idss, string(e.ID))
+		idss = append(idss, e.ID)
 	}
-	fmt.Println("old query ids: ", strings.Join(idss, ","))
+	fmt.Println("old query ids: ", idss)
 	fmt.Println("is same: ", reflect.DeepEqual(ids, idss))
 
 	return c.JSON(http.StatusOK, EstateListResponse{Estates: estates})
