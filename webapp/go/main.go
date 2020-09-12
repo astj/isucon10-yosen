@@ -1053,14 +1053,24 @@ func searchEstateNazotte(c echo.Context) error {
 
 	b := coordinates.getBoundingBox()
 	estatesInBoundingBox := []Estate{}
-	query := `SELECT * FROM estate WHERE latitude <= ? AND latitude >= ? AND longitude <= ? AND longitude >= ? ORDER BY popularity DESC, id ASC`
-	err = db.SelectContext(ctx, &estatesInBoundingBox, query, b.BottomRightCorner.Latitude, b.TopLeftCorner.Latitude, b.BottomRightCorner.Longitude, b.TopLeftCorner.Longitude)
+	es := []Estate{}
+	query := `SELECT * FROM estate ORDER BY popularity DESC, id ASC`
+	err = db.SelectContext(ctx, &es, query, b.BottomRightCorner.Latitude, b.TopLeftCorner.Latitude, b.BottomRightCorner.Longitude, b.TopLeftCorner.Longitude)
 	if err == sql.ErrNoRows {
 		c.Echo().Logger.Infof("select * from estate where latitude ...", err)
 		return c.JSON(http.StatusOK, EstateSearchResponse{Count: 0, Estates: []Estate{}})
 	} else if err != nil {
 		c.Echo().Logger.Errorf("database execution error : %v", err)
 		return c.NoContent(http.StatusInternalServerError)
+	}
+	for _, e := range es {
+		if e.Latitude <= b.BottomRightCorner.Latitude && e.Latitude >= b.TopLeftCorner.Latitude && e.Longitude <= b.BottomRightCorner.Longitude && e.Longitude >= b.TopLeftCorner.Longitude {
+			estatesInBoundingBox = append(estatesInBoundingBox, e)
+		}
+	}
+	if len(estatesInBoundingBox) == 0 {
+		c.Echo().Logger.Infof("select * from estate where latitude ...", err)
+		return c.JSON(http.StatusOK, EstateSearchResponse{Count: 0, Estates: []Estate{}})
 	}
 
 	estatesInPolygon := []Estate{}
