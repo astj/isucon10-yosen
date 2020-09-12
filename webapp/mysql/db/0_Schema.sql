@@ -23,6 +23,7 @@ CREATE TABLE isuumo.estate
 create index `idx_estate_door_width_height_popularity` on isuumo.estate (`door_width`, `door_height`, `popularity`);
 create index `idx_estate_rent_id` on isuumo.estate (`rent`, `id`);
 create index `idx_estate_rent_popularity_id` on isuumo.estate (`rent`, `popularity`, `id`);
+create index `idx_estate_latitude_longitude_id` on isuumo.estate (`latitude`, `longitude`, `id`);
 
 CREATE TABLE isuumo.chair
 (
