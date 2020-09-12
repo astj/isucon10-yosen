@@ -815,6 +815,31 @@ func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
 	return estates, err
 }
 
+func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
+	key := genCacheKey(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+	ids, count, err := getEstateIDsFromRedis(key, limit, offset)
+	if err == errCacheNotHit {
+		estates, count, errStatusCode := searchEstatesWithCache(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features, limit, offset)
+		// 非同期で cache を更新する
+		go func(key string) {
+			ids, err := searchEstateIDsFromMysql(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+			if err != nil {
+				putEstateIDsToRedis(key, ids)
+			}
+		}(key)
+		return estates, count, errStatusCode
+	}
+	if err != nil {
+		return nil, 0, http.StatusInternalServerError
+	}
+	estates, err := searchEstatesFromIDs(ctx, ids)
+	if err != nil {
+		return nil, 0, http.StatusInternalServerError
+	}
+	// XXX
+	return estates, count, 0
+}
+
 func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
 	conditions, params, errStatusCode := makeEstateConditions(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
 	if errStatusCode != 0 {
