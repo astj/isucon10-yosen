@@ -957,7 +957,7 @@ func searchEstates(c echo.Context) error {
 
 	limit := int64(perPage)
 	offset := int64(page * perPage)
-	estates, count, errStatusCode := searchEstatesWithoutCache(ctx, c.QueryParam("doorHeightRangeId"), c.QueryParam("doorWidthRangeId"), c.QueryParam("rentRangeId"), c.QueryParam("features"), limit, offset)
+	estates, count, errStatusCode := searchEstatesWithCache(ctx, c.QueryParam("doorHeightRangeId"), c.QueryParam("doorWidthRangeId"), c.QueryParam("rentRangeId"), c.QueryParam("features"), limit, offset)
 
 	if errStatusCode != 0 {
 		return c.NoContent(errStatusCode)
