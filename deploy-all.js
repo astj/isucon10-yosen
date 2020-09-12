@@ -4,11 +4,11 @@ const { stderr } = require("process");
 
 const deploy = async () =>
   Promise.all(
-    ["isucon-server1, isucon-server2, isucon-server3"].map(
+    ["isucon-server1", "isucon-server2", "isucon-server3"].map(
       (s) =>
         new Promise((resolve, reject) => {
           console.log("deploy: ", s);
-          exec(`ssh -t ${s} "sudo /home/isucon/deploy.sh"`, (e, stdout, steerr) => {
+          exec(`ssh -t ${s} "sudo /home/isucon/isuumo/deploy.sh"`, (e, stdout, steerr) => {
             if (e) {
               console.log('error!: ', stderr);
               reject(e);
