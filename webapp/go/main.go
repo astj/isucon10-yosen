@@ -427,101 +427,6 @@ func postChair(c echo.Context) error {
 
 func searchChairs(c echo.Context) error {
 	ctx := c.Request().Context()
-	conditions := make([]string, 0)
-	params := make([]interface{}, 0)
-
-	if c.QueryParam("priceRangeId") != "" {
-		chairPrice, err := getRange(chairSearchCondition.Price, c.QueryParam("priceRangeId"))
-		if err != nil {
-			c.Echo().Logger.Infof("priceRangeID invalid, %v : %v", c.QueryParam("priceRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
-		}
-
-		if chairPrice.Min != -1 {
-			conditions = append(conditions, "price >= ?")
-			params = append(params, chairPrice.Min)
-		}
-		if chairPrice.Max != -1 {
-			conditions = append(conditions, "price < ?")
-			params = append(params, chairPrice.Max)
-		}
-	}
-
-	if c.QueryParam("heightRangeId") != "" {
-		chairHeight, err := getRange(chairSearchCondition.Height, c.QueryParam("heightRangeId"))
-		if err != nil {
-			c.Echo().Logger.Infof("heightRangeIf invalid, %v : %v", c.QueryParam("heightRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
-		}
-
-		if chairHeight.Min != -1 {
-			conditions = append(conditions, "height >= ?")
-			params = append(params, chairHeight.Min)
-		}
-		if chairHeight.Max != -1 {
-			conditions = append(conditions, "height < ?")
-			params = append(params, chairHeight.Max)
-		}
-	}
-
-	if c.QueryParam("widthRangeId") != "" {
-		chairWidth, err := getRange(chairSearchCondition.Width, c.QueryParam("widthRangeId"))
-		if err != nil {
-			c.Echo().Logger.Infof("widthRangeID invalid, %v : %v", c.QueryParam("widthRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
-		}
-
-		if chairWidth.Min != -1 {
-			conditions = append(conditions, "width >= ?")
-			params = append(params, chairWidth.Min)
-		}
-		if chairWidth.Max != -1 {
-			conditions = append(conditions, "width < ?")
-			params = append(params, chairWidth.Max)
-		}
-	}
-
-	if c.QueryParam("depthRangeId") != "" {
-		chairDepth, err := getRange(chairSearchCondition.Depth, c.QueryParam("depthRangeId"))
-		if err != nil {
-			c.Echo().Logger.Infof("depthRangeId invalid, %v : %v", c.QueryParam("depthRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
-		}
-
-		if chairDepth.Min != -1 {
-			conditions = append(conditions, "depth >= ?")
-			params = append(params, chairDepth.Min)
-		}
-		if chairDepth.Max != -1 {
-			conditions = append(conditions, "depth < ?")
-			params = append(params, chairDepth.Max)
-		}
-	}
-
-	if c.QueryParam("kind") != "" {
-		conditions = append(conditions, "kind = ?")
-		params = append(params, c.QueryParam("kind"))
-	}
-
-	if c.QueryParam("color") != "" {
-		conditions = append(conditions, "color = ?")
-		params = append(params, c.QueryParam("color"))
-	}
-
-	if c.QueryParam("features") != "" {
-		for _, f := range strings.Split(c.QueryParam("features"), ",") {
-			conditions = append(conditions, "features LIKE CONCAT('%', ?, '%')")
-			params = append(params, f)
-		}
-	}
-
-	if len(conditions) == 0 {
-		c.Echo().Logger.Infof("Search condition not found")
-		return c.NoContent(http.StatusBadRequest)
-	}
-
-	// もう stock が 0 のは残ってない
-	// conditions = append(conditions, "stock > 0")
 
 	page, err := strconv.Atoi(c.QueryParam("page"))
 	if err != nil {
@@ -535,30 +440,18 @@ func searchChairs(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	searchQuery := "SELECT * FROM chair WHERE "
-	countQuery := "SELECT COUNT(*) FROM chair WHERE "
-	searchCondition := strings.Join(conditions, " AND ")
-	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
+	limit := int64(perPage)
+	offset := int64(page * perPage)
+	chairs, count, errStatusCode := searchChairsWithoutCache(ctx, c.QueryParam("priceRangeId"), c.QueryParam("heightRangeId"), c.QueryParam("widthRangeId"), c.QueryParam("depthRangeId"), c.QueryParam("kind"), c.QueryParam("color"), c.QueryParam("features"), limit, offset)
 
-	var res ChairSearchResponse
-	err = db.GetContext(ctx, &res.Count, countQuery+searchCondition, params...)
-	if err != nil {
-		c.Logger().Errorf("searchChairs DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	if errStatusCode != 0 {
+		return c.NoContent(errStatusCode)
 	}
 
-	chairs := []Chair{}
-	params = append(params, perPage, page*perPage)
-	err = db.SelectContext(ctx, &chairs, searchQuery+searchCondition+limitOffset, params...)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return c.JSON(http.StatusOK, ChairSearchResponse{Count: 0, Chairs: []Chair{}})
-		}
-		c.Logger().Errorf("searchChairs DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	res := ChairSearchResponse{
+		Chairs: chairs,
+		Count:  count,
 	}
-
-	res.Chairs = chairs
 
 	return c.JSON(http.StatusOK, res)
 }
@@ -799,7 +692,7 @@ func putEstateIDsToRedis(key string, res []int64) error {
 // purgeFromRedis は入稿したときにキャッシュを全滅させる
 func purgeEstateIDsFromRedis() error {
 	ctx := context.TODO()
-	return rdbEstate.FlushAllAsync(ctx).Err()
+	return rdbEstate.FlushDBAsync(ctx).Err()
 }
 
 // キャッシュに埋める用
@@ -899,6 +792,114 @@ func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, do
 		return nil, 0, http.StatusInternalServerError
 	}
 	return estates, count, 0
+}
+func searchChairsWithoutCache(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string, limit int64, offset int64) ([]Chair, int64, int) {
+	conditions, params, errStatusCode := makeChairConditions(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
+	if errStatusCode != 0 {
+		return nil, 0, errStatusCode
+	}
+
+	if len(conditions) == 0 {
+		// c.Echo().Logger.Infof("searchEstates search condition not found")
+		return nil, 0, http.StatusBadRequest
+	}
+
+	searchQuery := "SELECT * FROM chair WHERE "
+	countQuery := "SELECT COUNT(*) FROM chair WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
+
+	var count int64
+	err := db.GetContext(ctx, &count, countQuery+searchCondition, params...)
+	if err != nil {
+		// c.Logger().Errorf("searchChairs DB execution error : %v", err)
+		return nil, 0, http.StatusInternalServerError
+	}
+
+	chairs := []Chair{}
+	params = append(params, limit, offset)
+	err = db.SelectContext(ctx, &chairs, searchQuery+searchCondition+limitOffset, params...)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return chairs, 0, 0 // 200
+		}
+		return nil, 0, http.StatusInternalServerError
+	}
+	return chairs, count, 0
+}
+
+func makeChairConditions(priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string) ([]string, []interface{}, int) {
+	conditions := make([]string, 0)
+	params := make([]interface{}, 0)
+
+	if priceRangeID != "" {
+		chairPrice, err := getRange(chairSearchCondition.Price, priceRangeID)
+		if err != nil {
+			// c.Echo().Logger.Infof("priceRangeID invalid, %v : %v", c.QueryParam("priceRangeId"), err)
+			return conditions, params, http.StatusBadRequest
+		}
+
+		if chairPrice.Min != -1 {
+			conditions = append(conditions, "price >= ?")
+			params = append(params, chairPrice.Min)
+		}
+		if chairPrice.Max != -1 {
+			conditions = append(conditions, "price < ?")
+			params = append(params, chairPrice.Max)
+		}
+	}
+
+	if heightRangeID != "" {
+		chairHeight, err := getRange(chairSearchCondition.Height, heightRangeID)
+		if err != nil {
+			// c.Echo().Logger.Infof("heightRangeIf invalid, %v : %v", c.QueryParam("heightRangeId"), err)
+			return conditions, params, http.StatusBadRequest
+		}
+
+		if chairHeight.Min != -1 {
+			conditions = append(conditions, "height >= ?")
+			params = append(params, chairHeight.Min)
+		}
+		if chairHeight.Max != -1 {
+			conditions = append(conditions, "height < ?")
+			params = append(params, chairHeight.Max)
+		}
+	}
+
+	if widthRangeID != "" {
+		chairWidth, err := getRange(chairSearchCondition.Width, widthRangeID)
+		if err != nil {
+			// c.Echo().Logger.Infof("widthRangeID invalid, %v : %v", c.QueryParam("widthRangeId"), err)
+			return conditions, params, http.StatusBadRequest
+		}
+
+		if chairWidth.Min != -1 {
+			conditions = append(conditions, "width >= ?")
+			params = append(params, chairWidth.Min)
+		}
+		if chairWidth.Max != -1 {
+			conditions = append(conditions, "width < ?")
+			params = append(params, chairWidth.Max)
+		}
+	}
+
+	if kind != "" {
+		conditions = append(conditions, "kind = ?")
+		params = append(params, kind)
+	}
+
+	if color != "" {
+		conditions = append(conditions, "color = ?")
+		params = append(params, color)
+	}
+
+	if features != "" {
+		for _, f := range strings.Split(features, ",") {
+			conditions = append(conditions, "features like concat('%', ?, '%')")
+			params = append(params, f)
+		}
+	}
+	return conditions, params, 0
 }
 
 func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]string, []interface{}, int) {
