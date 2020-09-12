@@ -782,7 +782,6 @@ func putEstateIDsToRedis(key string, res []int64) error {
 	for i, v := range res {
 		idsStrSlice[i] = fmt.Sprintf("%d", v)
 	}
-	fmt.Println(idsStrSlice...)
 	pipe.RPush(ctx, key, idsStrSlice...)
 	_, err := pipe.Exec(ctx)
 	if err != nil {
