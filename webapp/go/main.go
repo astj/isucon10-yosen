@@ -839,8 +839,9 @@ func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorW
 			ctx := context.TODO()
 			ids, err := searchEstateIDsFromMysql(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
 			if err != nil {
-				putEstateIDsToRedis(key, ids)
+				fmt.Println(err)
 			}
+			putEstateIDsToRedis(key, ids)
 		}(key)
 		return estates, count, errStatusCode
 	}
