@@ -725,16 +725,15 @@ func postEstate(c echo.Context) error {
 	return c.NoContent(http.StatusCreated)
 }
 
-func searchEstates(c echo.Context) error {
-	ctx := c.Request().Context()
+func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]string, []interface{}, int) {
 	conditions := make([]string, 0)
 	params := make([]interface{}, 0)
 
-	if c.QueryParam("doorHeightRangeId") != "" {
-		doorHeight, err := getRange(estateSearchCondition.DoorHeight, c.QueryParam("doorHeightRangeId"))
+	if doorHeightRangeID != "" {
+		doorHeight, err := getRange(estateSearchCondition.DoorHeight, doorHeightRangeID)
 		if err != nil {
-			c.Echo().Logger.Infof("doorHeightRangeID invalid, %v : %v", c.QueryParam("doorHeightRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
+			// c.Echo().Logger.Infof("doorHeightRangeID invalid, %v : %v", doorHeightRangeId, err)
+			return conditions, params, http.StatusBadRequest
 		}
 
 		if doorHeight.Min != -1 {
@@ -747,11 +746,11 @@ func searchEstates(c echo.Context) error {
 		}
 	}
 
-	if c.QueryParam("doorWidthRangeId") != "" {
-		doorWidth, err := getRange(estateSearchCondition.DoorWidth, c.QueryParam("doorWidthRangeId"))
+	if doorWidthRangeID != "" {
+		doorWidth, err := getRange(estateSearchCondition.DoorWidth, doorWidthRangeID)
 		if err != nil {
-			c.Echo().Logger.Infof("doorWidthRangeID invalid, %v : %v", c.QueryParam("doorWidthRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
+			// c.Echo().Logger.Infof("doorWidthRangeID invalid, %v : %v", c.QueryParam("doorWidthRangeId"), err)
+			return conditions, params, http.StatusBadRequest
 		}
 
 		if doorWidth.Min != -1 {
@@ -764,11 +763,11 @@ func searchEstates(c echo.Context) error {
 		}
 	}
 
-	if c.QueryParam("rentRangeId") != "" {
-		estateRent, err := getRange(estateSearchCondition.Rent, c.QueryParam("rentRangeId"))
+	if rentRangeID != "" {
+		estateRent, err := getRange(estateSearchCondition.Rent, rentRangeID)
 		if err != nil {
-			c.Echo().Logger.Infof("rentRangeID invalid, %v : %v", c.QueryParam("rentRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
+			// c.Echo().Logger.Infof("rentRangeID invalid, %v : %v", c.QueryParam("rentRangeId"), err)
+			return conditions, params, http.StatusBadRequest
 		}
 
 		if estateRent.Min != -1 {
@@ -781,11 +780,24 @@ func searchEstates(c echo.Context) error {
 		}
 	}
 
-	if c.QueryParam("features") != "" {
-		for _, f := range strings.Split(c.QueryParam("features"), ",") {
+	if features != "" {
+		for _, f := range strings.Split(features, ",") {
 			conditions = append(conditions, "features like concat('%', ?, '%')")
 			params = append(params, f)
 		}
+	}
+	return conditions, params, 0
+}
+
+func searchEstates(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	conditions, params, errorCode := makeEstateConditions(
+		c.QueryParam("doorHeightRangeId"), c.QueryParam("doorWidthRangeId"), c.QueryParam("rentRangeId"), c.QueryParam("features"),
+	)
+
+	if errorCode != 0 {
+		return c.NoContent(errorCode)
 	}
 
 	if len(conditions) == 0 {
