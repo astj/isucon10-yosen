@@ -722,7 +722,8 @@ func postEstate(c echo.Context) error {
 			return c.NoContent(http.StatusInternalServerError)
 		}
 		d := int(math.Pow(float64(doorWidth), 2) + math.Pow(float64(doorHeight), 2))
-		_, err = tx.Exec("INSERT INTO estate_metrics(estate_id, d) VALUES(?,?)", id, d)
+		s := doorWidth * doorHeight
+		_, err = tx.Exec("INSERT INTO estate_metrics(estate_id, d, s) VALUES(?,?)", id, d, s)
 		if err != nil {
 			c.Logger().Errorf("failed to insert estate: %v", err)
 			return c.NoContent(http.StatusInternalServerError)
@@ -882,10 +883,13 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 
 	var ids []int64
 	dwh := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Height), 2))
+	swh := chair.Width + chair.Height
 	dwd := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Depth), 2))
+	swd := chair.Width + chair.Depth
 	dhd := int(math.Pow(float64(chair.Height), 2) + math.Pow(float64(chair.Depth), 2))
-	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ?) OR (d >= ? ) OR (d >= ?)`
-	err = db.SelectContext(ctx, &ids, query, dwh, dwd, dhd)
+	shd := chair.Height * chair.Depth
+	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ? AND s <= ?) OR (d >= ? AND s <= ?) OR (d >= ? AND s <= ?)`
+	err = db.SelectContext(ctx, &ids, query, dwh, swh, dwd, swd, dhd, shd)
 
 	fmt.Println("estate_id_count: ", len(ids))
 

@@ -53,6 +53,7 @@ CREATE TABLE isuumo.estate_metrics
     estate_id INTEGER NOT NULL,
     -- door_width^2 + door_height^2
     d INTEGER NOT NULL,
+    s INTEGER NOT NULL,
 
     PRIMARY KEY (id)
 );
