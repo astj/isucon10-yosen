@@ -42,3 +42,4 @@ CREATE TABLE isuumo.chair
 );
 
 create index `idx_chair_price_popularity` on isuumo.chair (`price`, `popularity`);
+create index `idx_chair_price_id` on isuumo.chair (`price`, `id`);
