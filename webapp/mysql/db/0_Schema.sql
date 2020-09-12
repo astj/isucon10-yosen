@@ -20,8 +20,9 @@ CREATE TABLE isuumo.estate
     popularity  INTEGER             NOT NULL
 );
 
-create index `idx_estate_door_width_height` on isuumo.estate (`door_width`, `door_height`);
+create index `idx_estate_door_width_height_popularity` on isuumo.estate (`door_width`, `door_height`, `popularity`);
 create index `idx_estate_rent_id` on isuumo.estate (`rent`, `id`);
+create index `idx_estate_rent_popularity` on isuumo.estate (`rent`, `popularity`);
 
 CREATE TABLE isuumo.chair
 (
@@ -40,4 +41,4 @@ CREATE TABLE isuumo.chair
     stock       INTEGER         NOT NULL
 );
 
-create index `idx_chair_price` on isuumo.chair (`price`);
+create index `idx_chair_price_popularity` on isuumo.chair (`price`, `popularity`);
