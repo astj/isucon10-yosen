@@ -910,7 +910,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 	for _, e := range estates {
 		ids = append(ids, string(e.ID))
 	}
-	fmt.Println("new query ids: ", ids)
+	fmt.Println("new query ids: ", strings.Join(ids, ","))
 	estates = make([]Estate, 0)
 
 	w := chair.Width
@@ -930,7 +930,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 	for _, e := range estates {
 		idss = append(idss, string(e.ID))
 	}
-	fmt.Println("old query ids: ", idss)
+	fmt.Println("old query ids: ", strings.Join(idss, ","))
 	fmt.Println("is same: ", reflect.DeepEqual(ids, idss))
 
 	return c.JSON(http.StatusOK, EstateListResponse{Estates: estates})
