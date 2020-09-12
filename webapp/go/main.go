@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -905,6 +906,11 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	fmt.Println("new query: ", len(estates))
+	ids = make([]string, 0)
+	for _, e := range estates {
+		ids = append(ids, string(e.ID))
+	}
+	fmt.Println("new query ids: ", ids)
 	estates = make([]Estate, 0)
 
 	w := chair.Width
@@ -920,6 +926,12 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	fmt.Println("old query: ", len(estates))
+	idss := make([]string, 0)
+	for _, e := range estates {
+		idss = append(idss, string(e.ID))
+	}
+	fmt.Println("old query ids: ", idss)
+	fmt.Println("is same: ", reflect.DeepEqual(ids, idss))
 
 	return c.JSON(http.StatusOK, EstateListResponse{Estates: estates})
 }
