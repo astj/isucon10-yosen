@@ -243,7 +243,7 @@ func init() {
 func main() {
 	// newrelic
 	app, _ := newrelic.NewApplication(
-		newrelic.ConfigAppName("isucon10-qualify"),
+		newrelic.ConfigAppName(getEnv("NEWRELIC_APP_NAME", "isucon10-qualify")),
 		newrelic.ConfigLicense(os.Getenv("NEWRELIC_LICENSE_KEY")),
 		newrelic.ConfigDistributedTracerEnabled(true),
 	)
