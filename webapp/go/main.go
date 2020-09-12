@@ -778,6 +778,43 @@ func purgeEstateIDsFromRedis() error {
 	return rdb.FlushAll(ctx).Err()
 }
 
+// キャッシュに埋める用
+func searchEstateIDsFromMysql(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]int64, error) {
+	conditions, params, errStatusCode := makeEstateConditions(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+	if errStatusCode != 0 {
+		return nil, errors.New("failed")
+	}
+
+	if len(conditions) == 0 {
+		// c.Echo().Logger.Infof("searchEstates search condition not found")
+		return nil, errors.New("failed")
+	}
+
+	searchQuery := "SELECT id FROM estate WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	order := " ORDER BY popularity DESC, id ASC"
+
+	var ids []int64
+	err := db.SelectContext(ctx, &ids, searchQuery+searchCondition+order, params...)
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
+	var estates []Estate
+	arg := map[string]interface{}{
+		"ids": ids,
+	}
+	// estate.popularity の index は必要そう
+	query, args, _ := sqlx.Named(`SELECT * FROM estate WHERE id IN (:ids) ORDER BY popularity DESC, id ASC`, arg)
+	query, args, _ = sqlx.In(query, args...)
+	query = db.Rebind(query)
+	err := db.SelectContext(ctx, &estates, query, args...)
+	return estates, err
+}
+
 func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
 	conditions, params, errStatusCode := makeEstateConditions(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
 	if errStatusCode != 0 {
