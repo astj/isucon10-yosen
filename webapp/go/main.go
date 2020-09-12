@@ -341,7 +341,7 @@ func getChairDetail(c echo.Context) error {
 		}
 		c.Echo().Logger.Errorf("Failed to get the chair from id : %v", err)
 		return c.NoContent(http.StatusInternalServerError)
-	} else if chair.Stock <= 0 {
+	} else if chair.Stock <= 0 { // 0 になったときに消すようにしたのでもうヒットすることはなくなったはずだけど念のため
 		c.Echo().Logger.Infof("requested id's chair is sold out : %v", id)
 		return c.NoContent(http.StatusNotFound)
 	}
@@ -500,7 +500,8 @@ func searchChairs(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	conditions = append(conditions, "stock > 0")
+	// もう stock が 0 のは残ってない
+	// conditions = append(conditions, "stock > 0")
 
 	page, err := strconv.Atoi(c.QueryParam("page"))
 	if err != nil {
@@ -611,7 +612,7 @@ func getChairSearchCondition(c echo.Context) error {
 func getLowPricedChair(c echo.Context) error {
 	ctx := c.Request().Context()
 	var chairs []Chair
-	query := `SELECT * FROM chair WHERE stock > 0 ORDER BY price ASC, id ASC LIMIT ?`
+	query := `SELECT * FROM chair ORDER BY price ASC, id ASC LIMIT ?`
 	err := db.SelectContext(ctx, &chairs, query, Limit)
 	if err != nil {
 		if err == sql.ErrNoRows {
