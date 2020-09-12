@@ -33,8 +33,7 @@ var mySQLConnectionData *MySQLConnectionEnv
 var chairSearchCondition ChairSearchCondition
 var estateSearchCondition EstateSearchCondition
 
-var rdbEstate *redis.Client
-var rdbChair *redis.Client
+var rdb *redis.Client
 
 type InitializeResponse struct {
 	Language string `json:"language"`
@@ -248,13 +247,8 @@ func init() {
 
 func main() {
 	// redis
-	rdbEstate = redis.NewClient(&redis.Options{
+	rdb = redis.NewClient(&redis.Options{
 		Addr: getEnv("REDIS_DSN", "localhost:6379"),
-		DB:   0,
-	})
-	rdbChair = redis.NewClient(&redis.Options{
-		Addr: getEnv("REDIS_DSN", "localhost:6379"),
-		DB:   1,
 	})
 
 	// Echo instance
@@ -305,7 +299,6 @@ func main() {
 func initialize(c echo.Context) error {
 	// これから db の中身が変わるので redis の cache も吹き飛ばす
 	_ = purgeEstateIDsFromRedis()
-	_ = purgeChairIDsFromRedis()
 
 	sqlDir := filepath.Join("..", "mysql", "db")
 	paths := []string{
@@ -414,14 +407,106 @@ func postChair(c echo.Context) error {
 		c.Logger().Errorf("failed to commit tx: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
-	// estates が変わったら redis の cache は飛ばさないといけない
-	_ = purgeChairIDsFromRedis()
-
 	return c.NoContent(http.StatusCreated)
 }
 
 func searchChairs(c echo.Context) error {
 	ctx := c.Request().Context()
+	conditions := make([]string, 0)
+	params := make([]interface{}, 0)
+
+	if c.QueryParam("priceRangeId") != "" {
+		chairPrice, err := getRange(chairSearchCondition.Price, c.QueryParam("priceRangeId"))
+		if err != nil {
+			c.Echo().Logger.Infof("priceRangeID invalid, %v : %v", c.QueryParam("priceRangeId"), err)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		if chairPrice.Min != -1 {
+			conditions = append(conditions, "price >= ?")
+			params = append(params, chairPrice.Min)
+		}
+		if chairPrice.Max != -1 {
+			conditions = append(conditions, "price < ?")
+			params = append(params, chairPrice.Max)
+		}
+	}
+
+	if c.QueryParam("heightRangeId") != "" {
+		chairHeight, err := getRange(chairSearchCondition.Height, c.QueryParam("heightRangeId"))
+		if err != nil {
+			c.Echo().Logger.Infof("heightRangeIf invalid, %v : %v", c.QueryParam("heightRangeId"), err)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		if chairHeight.Min != -1 {
+			conditions = append(conditions, "height >= ?")
+			params = append(params, chairHeight.Min)
+		}
+		if chairHeight.Max != -1 {
+			conditions = append(conditions, "height < ?")
+			params = append(params, chairHeight.Max)
+		}
+	}
+
+	if c.QueryParam("widthRangeId") != "" {
+		chairWidth, err := getRange(chairSearchCondition.Width, c.QueryParam("widthRangeId"))
+		if err != nil {
+			c.Echo().Logger.Infof("widthRangeID invalid, %v : %v", c.QueryParam("widthRangeId"), err)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		if chairWidth.Min != -1 {
+			conditions = append(conditions, "width >= ?")
+			params = append(params, chairWidth.Min)
+		}
+		if chairWidth.Max != -1 {
+			conditions = append(conditions, "width < ?")
+			params = append(params, chairWidth.Max)
+		}
+	}
+
+	if c.QueryParam("depthRangeId") != "" {
+		chairDepth, err := getRange(chairSearchCondition.Depth, c.QueryParam("depthRangeId"))
+		if err != nil {
+			c.Echo().Logger.Infof("depthRangeId invalid, %v : %v", c.QueryParam("depthRangeId"), err)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		if chairDepth.Min != -1 {
+			conditions = append(conditions, "depth >= ?")
+			params = append(params, chairDepth.Min)
+		}
+		if chairDepth.Max != -1 {
+			conditions = append(conditions, "depth < ?")
+			params = append(params, chairDepth.Max)
+		}
+	}
+
+	if c.QueryParam("kind") != "" {
+		conditions = append(conditions, "kind = ?")
+		params = append(params, c.QueryParam("kind"))
+	}
+
+	if c.QueryParam("color") != "" {
+		conditions = append(conditions, "color = ?")
+		params = append(params, c.QueryParam("color"))
+	}
+
+	if c.QueryParam("features") != "" {
+		for _, f := range strings.Split(c.QueryParam("features"), ",") {
+			conditions = append(conditions, "features LIKE CONCAT('%', ?, '%')")
+			params = append(params, f)
+		}
+	}
+
+	if len(conditions) == 0 {
+		c.Echo().Logger.Infof("Search condition not found")
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	// もう stock が 0 のは残ってない
+	// conditions = append(conditions, "stock > 0")
 
 	page, err := strconv.Atoi(c.QueryParam("page"))
 	if err != nil {
@@ -435,18 +520,30 @@ func searchChairs(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	limit := int64(perPage)
-	offset := int64(page * perPage)
-	chairs, count, errStatusCode := searchChairsWithCache(ctx, c.QueryParam("priceRangeId"), c.QueryParam("heightRangeId"), c.QueryParam("widthRangeId"), c.QueryParam("depthRangeId"), c.QueryParam("kind"), c.QueryParam("color"), c.QueryParam("features"), limit, offset)
+	searchQuery := "SELECT * FROM chair WHERE "
+	countQuery := "SELECT COUNT(*) FROM chair WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
 
-	if errStatusCode != 0 {
-		return c.NoContent(errStatusCode)
+	var res ChairSearchResponse
+	err = db.GetContext(ctx, &res.Count, countQuery+searchCondition, params...)
+	if err != nil {
+		c.Logger().Errorf("searchChairs DB execution error : %v", err)
+		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	res := ChairSearchResponse{
-		Chairs: chairs,
-		Count:  count,
+	chairs := []Chair{}
+	params = append(params, perPage, page*perPage)
+	err = db.SelectContext(ctx, &chairs, searchQuery+searchCondition+limitOffset, params...)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusOK, ChairSearchResponse{Count: 0, Chairs: []Chair{}})
+		}
+		c.Logger().Errorf("searchChairs DB execution error : %v", err)
+		return c.NoContent(http.StatusInternalServerError)
 	}
+
+	res.Chairs = chairs
 
 	return c.JSON(http.StatusOK, res)
 }
@@ -496,7 +593,6 @@ func buyChair(c echo.Context) error {
 			c.Echo().Logger.Errorf("chair stock delete failed : %v", err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
-		_ = purgeChairIDsFromRedis()
 	} else {
 		_, err = tx.ExecContext(ctx, "UPDATE chair SET stock = stock - 1 WHERE id = ?", id)
 		if err != nil {
@@ -628,10 +724,6 @@ func postEstate(c echo.Context) error {
 	return c.NoContent(http.StatusCreated)
 }
 
-func genChairCacheKey(priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string) string {
-	return strings.Join([]string{priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features}, "_")
-}
-
 func genCacheKey(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) string {
 	return strings.Join([]string{doorHeightRangeID, doorWidthRangeID, rentRangeID, features}, "_")
 }
@@ -643,7 +735,7 @@ var errCacheNotHit = errors.New("cache not hit")
 func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int64, error) {
 	ctx := context.TODO()
 	// 全体の長さ
-	length, err := rdbEstate.LLen(ctx, key).Result()
+	length, err := rdb.LLen(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, 0, errCacheNotHit
@@ -653,38 +745,7 @@ func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int6
 	if length == 0 {
 		return nil, 0, errCacheNotHit
 	}
-	val, err := rdbEstate.LRange(ctx, key, offset, offset+limit-1).Result()
-	if err != nil {
-		// length があったならこっちがないことはないはず...
-		if err == redis.Nil {
-			return nil, 0, errCacheNotHit
-		}
-		return nil, 0, err
-	}
-	res := make([]int64, len(val))
-	for i, v := range val {
-		intVal, _ := strconv.Atoi(v)
-		res[i] = int64(intVal)
-	}
-	return res, length, nil
-}
-
-// getFromRedis は redis から取得する。
-// redis になかった場合は errCacheNotHit が帰ります
-func getChairIDsFromRedis(key string, limit int64, offset int64) ([]int64, int64, error) {
-	ctx := context.TODO()
-	// 全体の長さ
-	length, err := rdbChair.LLen(ctx, key).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return nil, 0, errCacheNotHit
-		}
-		return nil, 0, err
-	}
-	if length == 0 {
-		return nil, 0, errCacheNotHit
-	}
-	val, err := rdbChair.LRange(ctx, key, offset, offset+limit-1).Result()
+	val, err := rdb.LRange(ctx, key, offset, offset+limit-1).Result()
 	if err != nil {
 		// length があったならこっちがないことはないはず...
 		if err == redis.Nil {
@@ -706,27 +767,7 @@ func putEstateIDsToRedis(key string, res []int64) error {
 		return nil
 	}
 	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
-	pipe := rdbEstate.Pipeline()
-	pipe.Del(ctx, key)
-	idsStrSlice := make([]interface{}, len(res))
-	for i, v := range res {
-		idsStrSlice[i] = fmt.Sprintf("%d", v)
-	}
-	pipe.RPush(ctx, key, idsStrSlice...)
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		fmt.Println(err)
-	}
-	return err
-}
-
-func putChairIDsToRedis(key string, res []int64) error {
-	ctx := context.TODO()
-	if len(res) == 0 {
-		return nil
-	}
-	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
-	pipe := rdbChair.Pipeline()
+	pipe := rdb.Pipeline()
 	pipe.Del(ctx, key)
 	idsStrSlice := make([]interface{}, len(res))
 	for i, v := range res {
@@ -743,13 +784,7 @@ func putChairIDsToRedis(key string, res []int64) error {
 // purgeFromRedis は入稿したときにキャッシュを全滅させる
 func purgeEstateIDsFromRedis() error {
 	ctx := context.TODO()
-	return rdbEstate.FlushDBAsync(ctx).Err()
-}
-
-// purgeFromRedis は入稿したときにキャッシュを全滅させる
-func purgeChairIDsFromRedis() error {
-	ctx := context.TODO()
-	return rdbChair.FlushDBAsync(ctx).Err()
+	return rdb.FlushAllAsync(ctx).Err()
 }
 
 // キャッシュに埋める用
@@ -776,42 +811,6 @@ func searchEstateIDsFromMysql(ctx context.Context, doorHeightRangeID string, doo
 	return ids, nil
 }
 
-func searchChairIDsFromMysql(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string) ([]int64, error) {
-	conditions, params, errStatusCode := makeChairConditions(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
-	if errStatusCode != 0 {
-		return nil, errors.New("failed")
-	}
-
-	if len(conditions) == 0 {
-		// c.Echo().Logger.Infof("searchEstates search condition not found")
-		return nil, errors.New("failed")
-	}
-
-	searchQuery := "SELECT id FROM estate WHERE "
-	searchCondition := strings.Join(conditions, " AND ")
-	order := " ORDER BY popularity DESC, id ASC"
-
-	var ids []int64
-	err := db.SelectContext(ctx, &ids, searchQuery+searchCondition+order, params...)
-	if err != nil {
-		return nil, err
-	}
-	return ids, nil
-}
-
-func searchChairsFromIDs(ctx context.Context, ids []int64) ([]Chair, error) {
-	var chairs []Chair
-	arg := map[string]interface{}{
-		"ids": ids,
-	}
-	// chair.popularity の index は必要そう
-	query, args, _ := sqlx.Named(`SELECT * FROM chair WHERE id IN (:ids) ORDER BY popularity DESC, id ASC`, arg)
-	query, args, _ = sqlx.In(query, args...)
-	query = db.Rebind(query)
-	err := db.SelectContext(ctx, &chairs, query, args...)
-	return chairs, err
-}
-
 func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
 	var estates []Estate
 	arg := map[string]interface{}{
@@ -823,33 +822,6 @@ func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
 	query = db.Rebind(query)
 	err := db.SelectContext(ctx, &estates, query, args...)
 	return estates, err
-}
-
-func searchChairsWithCache(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string, limit int64, offset int64) ([]Chair, int64, int) {
-	key := genChairCacheKey(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
-
-	ids, count, err := getChairIDsFromRedis(key, limit, offset)
-	if err == errCacheNotHit {
-		chairs, count, errStatusCode := searchChairsWithoutCache(ctx, priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features, limit, offset)
-		// 非同期で cache を更新する
-		go func(key string) {
-			ctx := context.TODO()
-			ids, err := searchChairIDsFromMysql(ctx, priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
-			if err != nil {
-				fmt.Println(err)
-			}
-			putChairIDsToRedis(key, ids)
-		}(key)
-		return chairs, count, errStatusCode
-	}
-	if err != nil {
-		return nil, 0, http.StatusInternalServerError
-	}
-	chairs, err := searchChairsFromIDs(ctx, ids)
-	if err != nil {
-		return nil, 0, http.StatusInternalServerError
-	}
-	return chairs, count, 0
 }
 
 func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
@@ -912,115 +884,6 @@ func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, do
 		return nil, 0, http.StatusInternalServerError
 	}
 	return estates, count, 0
-}
-
-func searchChairsWithoutCache(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string, limit int64, offset int64) ([]Chair, int64, int) {
-	conditions, params, errStatusCode := makeChairConditions(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
-	if errStatusCode != 0 {
-		return nil, 0, errStatusCode
-	}
-
-	if len(conditions) == 0 {
-		// c.Echo().Logger.Infof("searchEstates search condition not found")
-		return nil, 0, http.StatusBadRequest
-	}
-
-	searchQuery := "SELECT * FROM chair WHERE "
-	countQuery := "SELECT COUNT(*) FROM chair WHERE "
-	searchCondition := strings.Join(conditions, " AND ")
-	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
-
-	var count int64
-	err := db.GetContext(ctx, &count, countQuery+searchCondition, params...)
-	if err != nil {
-		// c.Logger().Errorf("searchChairs DB execution error : %v", err)
-		return nil, 0, http.StatusInternalServerError
-	}
-
-	chairs := []Chair{}
-	params = append(params, limit, offset)
-	err = db.SelectContext(ctx, &chairs, searchQuery+searchCondition+limitOffset, params...)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return chairs, 0, 0 // 200
-		}
-		return nil, 0, http.StatusInternalServerError
-	}
-	return chairs, count, 0
-}
-
-func makeChairConditions(priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string) ([]string, []interface{}, int) {
-	conditions := make([]string, 0)
-	params := make([]interface{}, 0)
-
-	if priceRangeID != "" {
-		chairPrice, err := getRange(chairSearchCondition.Price, priceRangeID)
-		if err != nil {
-			// c.Echo().Logger.Infof("priceRangeID invalid, %v : %v", c.QueryParam("priceRangeId"), err)
-			return conditions, params, http.StatusBadRequest
-		}
-
-		if chairPrice.Min != -1 {
-			conditions = append(conditions, "price >= ?")
-			params = append(params, chairPrice.Min)
-		}
-		if chairPrice.Max != -1 {
-			conditions = append(conditions, "price < ?")
-			params = append(params, chairPrice.Max)
-		}
-	}
-
-	if heightRangeID != "" {
-		chairHeight, err := getRange(chairSearchCondition.Height, heightRangeID)
-		if err != nil {
-			// c.Echo().Logger.Infof("heightRangeIf invalid, %v : %v", c.QueryParam("heightRangeId"), err)
-			return conditions, params, http.StatusBadRequest
-		}
-
-		if chairHeight.Min != -1 {
-			conditions = append(conditions, "height >= ?")
-			params = append(params, chairHeight.Min)
-		}
-		if chairHeight.Max != -1 {
-			conditions = append(conditions, "height < ?")
-			params = append(params, chairHeight.Max)
-		}
-	}
-
-	if widthRangeID != "" {
-		chairWidth, err := getRange(chairSearchCondition.Width, widthRangeID)
-		if err != nil {
-			// c.Echo().Logger.Infof("widthRangeID invalid, %v : %v", c.QueryParam("widthRangeId"), err)
-			return conditions, params, http.StatusBadRequest
-		}
-
-		if chairWidth.Min != -1 {
-			conditions = append(conditions, "width >= ?")
-			params = append(params, chairWidth.Min)
-		}
-		if chairWidth.Max != -1 {
-			conditions = append(conditions, "width < ?")
-			params = append(params, chairWidth.Max)
-		}
-	}
-
-	if kind != "" {
-		conditions = append(conditions, "kind = ?")
-		params = append(params, kind)
-	}
-
-	if color != "" {
-		conditions = append(conditions, "color = ?")
-		params = append(params, color)
-	}
-
-	if features != "" {
-		for _, f := range strings.Split(features, ",") {
-			conditions = append(conditions, "features like concat('%', ?, '%')")
-			params = append(params, f)
-		}
-	}
-	return conditions, params, 0
 }
 
 func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]string, []interface{}, int) {
