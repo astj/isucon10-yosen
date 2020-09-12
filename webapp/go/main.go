@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
@@ -30,6 +33,8 @@ var db *sqlx.DB
 var mySQLConnectionData *MySQLConnectionEnv
 var chairSearchCondition ChairSearchCondition
 var estateSearchCondition EstateSearchCondition
+
+var rdb *redis.Client
 
 type InitializeResponse struct {
 	Language string `json:"language"`
@@ -249,6 +254,11 @@ func main() {
 		newrelic.ConfigDistributedTracerEnabled(true),
 	)
 
+	// redis
+	rdb = redis.NewClient(&redis.Options{
+		Addr: getEnv("REDIS_DSN", "localhost:6379"),
+	})
+
 	// Echo instance
 	e := echo.New()
 	e.Debug = true
@@ -296,6 +306,9 @@ func main() {
 }
 
 func initialize(c echo.Context) error {
+	// これから db の中身が変わるので redis の cache も吹き飛ばす
+	_ = purgeEstateIDsFromRedis()
+
 	sqlDir := filepath.Join("..", "mysql", "db")
 	paths := []string{
 		filepath.Join(sqlDir, "0_Schema.sql"),
@@ -715,19 +728,183 @@ func postEstate(c echo.Context) error {
 		c.Logger().Errorf("failed to commit tx: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
+	// estates が変わったら redis の cache は飛ばさないといけない
+	_ = purgeEstateIDsFromRedis()
 	return c.NoContent(http.StatusCreated)
 }
 
-func searchEstates(c echo.Context) error {
-	ctx := c.Request().Context()
+func genCacheKey(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) string {
+	return strings.Join([]string{doorHeightRangeID, doorWidthRangeID, rentRangeID, features}, "_")
+}
+
+var errCacheNotHit = errors.New("cache not hit")
+
+// getFromRedis は redis から取得する。
+// redis になかった場合は errCacheNotHit が帰ります
+func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int64, error) {
+	ctx := context.TODO()
+	// 全体の長さ
+	length, err := rdb.LLen(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, 0, errCacheNotHit
+		}
+		return nil, 0, err
+	}
+	if length == 0 {
+		return nil, 0, errCacheNotHit
+	}
+	val, err := rdb.LRange(ctx, key, offset, offset+limit-1).Result()
+	if err != nil {
+		// length があったならこっちがないことはないはず...
+		if err == redis.Nil {
+			return nil, 0, errCacheNotHit
+		}
+		return nil, 0, err
+	}
+	res := make([]int64, len(val))
+	for i, v := range val {
+		intVal, _ := strconv.Atoi(v)
+		res[i] = int64(intVal)
+	}
+	return res, length, nil
+}
+
+func putEstateIDsToRedis(key string, res []int64) error {
+	ctx := context.TODO()
+	if len(res) == 0 {
+		return nil
+	}
+	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
+	pipe := rdb.Pipeline()
+	pipe.Del(ctx, key)
+	idsStrSlice := make([]interface{}, len(res))
+	for i, v := range res {
+		idsStrSlice[i] = fmt.Sprintf("%d", v)
+	}
+	fmt.Println(idsStrSlice...)
+	pipe.RPush(ctx, key, idsStrSlice...)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return err
+}
+
+// purgeFromRedis は入稿したときにキャッシュを全滅させる
+func purgeEstateIDsFromRedis() error {
+	ctx := context.TODO()
+	return rdb.FlushAllAsync(ctx).Err()
+}
+
+// キャッシュに埋める用
+func searchEstateIDsFromMysql(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]int64, error) {
+	conditions, params, errStatusCode := makeEstateConditions(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+	if errStatusCode != 0 {
+		return nil, errors.New("failed")
+	}
+
+	if len(conditions) == 0 {
+		// c.Echo().Logger.Infof("searchEstates search condition not found")
+		return nil, errors.New("failed")
+	}
+
+	searchQuery := "SELECT id FROM estate WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	order := " ORDER BY popularity DESC, id ASC"
+
+	var ids []int64
+	err := db.SelectContext(ctx, &ids, searchQuery+searchCondition+order, params...)
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
+	var estates []Estate
+	arg := map[string]interface{}{
+		"ids": ids,
+	}
+	// estate.popularity の index は必要そう
+	query, args, _ := sqlx.Named(`SELECT * FROM estate WHERE id IN (:ids) ORDER BY popularity DESC, id ASC`, arg)
+	query, args, _ = sqlx.In(query, args...)
+	query = db.Rebind(query)
+	err := db.SelectContext(ctx, &estates, query, args...)
+	return estates, err
+}
+
+func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
+	key := genCacheKey(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+	ids, count, err := getEstateIDsFromRedis(key, limit, offset)
+	if err == errCacheNotHit {
+		estates, count, errStatusCode := searchEstatesWithoutCache(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features, limit, offset)
+		// 非同期で cache を更新する
+		go func(key string) {
+			ctx := context.TODO()
+			ids, err := searchEstateIDsFromMysql(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+			if err != nil {
+				fmt.Println(err)
+			}
+			putEstateIDsToRedis(key, ids)
+		}(key)
+		return estates, count, errStatusCode
+	}
+	if err != nil {
+		return nil, 0, http.StatusInternalServerError
+	}
+	estates, err := searchEstatesFromIDs(ctx, ids)
+	if err != nil {
+		return nil, 0, http.StatusInternalServerError
+	}
+	return estates, count, 0
+}
+
+func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
+	conditions, params, errStatusCode := makeEstateConditions(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+	if errStatusCode != 0 {
+		return nil, 0, errStatusCode
+	}
+
+	if len(conditions) == 0 {
+		// c.Echo().Logger.Infof("searchEstates search condition not found")
+		return nil, 0, http.StatusBadRequest
+	}
+
+	searchQuery := "SELECT * FROM estate WHERE "
+	countQuery := "SELECT COUNT(*) FROM estate WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
+
+	var count int64
+	err := db.GetContext(ctx, &count, countQuery+searchCondition, params...)
+	if err != nil {
+		// c.Logger().Errorf("searchEstates DB execution error : %v", err)
+		return nil, 0, http.StatusInternalServerError
+	}
+
+	estates := []Estate{}
+	params = append(params, limit, offset)
+	err = db.SelectContext(ctx, &estates, searchQuery+searchCondition+limitOffset, params...)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return estates, 0, 0 // 200
+		}
+		// c.Logger().Errorf("searchEstates DB execution error : %v", err)
+		return nil, 0, http.StatusInternalServerError
+	}
+	return estates, count, 0
+}
+
+func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]string, []interface{}, int) {
 	conditions := make([]string, 0)
 	params := make([]interface{}, 0)
 
-	if c.QueryParam("doorHeightRangeId") != "" {
-		doorHeight, err := getRange(estateSearchCondition.DoorHeight, c.QueryParam("doorHeightRangeId"))
+	if doorHeightRangeID != "" {
+		doorHeight, err := getRange(estateSearchCondition.DoorHeight, doorHeightRangeID)
 		if err != nil {
-			c.Echo().Logger.Infof("doorHeightRangeID invalid, %v : %v", c.QueryParam("doorHeightRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
+			// c.Echo().Logger.Infof("doorHeightRangeID invalid, %v : %v", doorHeightRangeId, err)
+			return conditions, params, http.StatusBadRequest
 		}
 
 		if doorHeight.Min != -1 {
@@ -740,11 +917,11 @@ func searchEstates(c echo.Context) error {
 		}
 	}
 
-	if c.QueryParam("doorWidthRangeId") != "" {
-		doorWidth, err := getRange(estateSearchCondition.DoorWidth, c.QueryParam("doorWidthRangeId"))
+	if doorWidthRangeID != "" {
+		doorWidth, err := getRange(estateSearchCondition.DoorWidth, doorWidthRangeID)
 		if err != nil {
-			c.Echo().Logger.Infof("doorWidthRangeID invalid, %v : %v", c.QueryParam("doorWidthRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
+			// c.Echo().Logger.Infof("doorWidthRangeID invalid, %v : %v", c.QueryParam("doorWidthRangeId"), err)
+			return conditions, params, http.StatusBadRequest
 		}
 
 		if doorWidth.Min != -1 {
@@ -757,11 +934,11 @@ func searchEstates(c echo.Context) error {
 		}
 	}
 
-	if c.QueryParam("rentRangeId") != "" {
-		estateRent, err := getRange(estateSearchCondition.Rent, c.QueryParam("rentRangeId"))
+	if rentRangeID != "" {
+		estateRent, err := getRange(estateSearchCondition.Rent, rentRangeID)
 		if err != nil {
-			c.Echo().Logger.Infof("rentRangeID invalid, %v : %v", c.QueryParam("rentRangeId"), err)
-			return c.NoContent(http.StatusBadRequest)
+			// c.Echo().Logger.Infof("rentRangeID invalid, %v : %v", c.QueryParam("rentRangeId"), err)
+			return conditions, params, http.StatusBadRequest
 		}
 
 		if estateRent.Min != -1 {
@@ -774,17 +951,17 @@ func searchEstates(c echo.Context) error {
 		}
 	}
 
-	if c.QueryParam("features") != "" {
-		for _, f := range strings.Split(c.QueryParam("features"), ",") {
+	if features != "" {
+		for _, f := range strings.Split(features, ",") {
 			conditions = append(conditions, "features like concat('%', ?, '%')")
 			params = append(params, f)
 		}
 	}
+	return conditions, params, 0
+}
 
-	if len(conditions) == 0 {
-		c.Echo().Logger.Infof("searchEstates search condition not found")
-		return c.NoContent(http.StatusBadRequest)
-	}
+func searchEstates(c echo.Context) error {
+	ctx := c.Request().Context()
 
 	page, err := strconv.Atoi(c.QueryParam("page"))
 	if err != nil {
@@ -798,30 +975,18 @@ func searchEstates(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	searchQuery := "SELECT * FROM estate WHERE "
-	countQuery := "SELECT COUNT(*) FROM estate WHERE "
-	searchCondition := strings.Join(conditions, " AND ")
-	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
+	limit := int64(perPage)
+	offset := int64(page * perPage)
+	estates, count, errStatusCode := searchEstatesWithCache(ctx, c.QueryParam("doorHeightRangeId"), c.QueryParam("doorWidthRangeId"), c.QueryParam("rentRangeId"), c.QueryParam("features"), limit, offset)
 
-	var res EstateSearchResponse
-	err = db.GetContext(ctx, &res.Count, countQuery+searchCondition, params...)
-	if err != nil {
-		c.Logger().Errorf("searchEstates DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	if errStatusCode != 0 {
+		return c.NoContent(errStatusCode)
 	}
 
-	estates := []Estate{}
-	params = append(params, perPage, page*perPage)
-	err = db.SelectContext(ctx, &estates, searchQuery+searchCondition+limitOffset, params...)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return c.JSON(http.StatusOK, EstateSearchResponse{Count: 0, Estates: []Estate{}})
-		}
-		c.Logger().Errorf("searchEstates DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	res := EstateSearchResponse{
+		Estates: estates,
+		Count:   count,
 	}
-
-	res.Estates = estates
 
 	return c.JSON(http.StatusOK, res)
 }
