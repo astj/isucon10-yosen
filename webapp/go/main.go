@@ -750,6 +750,9 @@ func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int6
 		}
 		return nil, 0, err
 	}
+	if length == 0 {
+		return nil, 0, errCacheNotHit
+	}
 	val, err := rdb.LRange(ctx, key, offset, offset+limit-1).Result()
 	if err != nil {
 		// length があったならこっちがないことはないはず...
