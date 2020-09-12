@@ -891,7 +891,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		"ids":   ids,
 		"limit": Limit,
 	}
-	query, args, _ := sqlx.Named(`SELECT * FROM estate IN (:ids) ORDER BY popularity DESC, id ASC LIMIT :limit`, arg)
+	query, args, _ := sqlx.Named(`SELECT * FROM estate WHERE id IN (:ids) ORDER BY popularity DESC, id ASC LIMIT :limit`, arg)
 	query, args, _ = sqlx.In(query, args...)
 	query = db.Rebind(query)
 	err = db.SelectContext(ctx, &estates, query, args...)
