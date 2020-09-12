@@ -30,7 +30,9 @@ const Limit = 20
 const NazotteLimit = 50
 
 var db *sqlx.DB
+var dbChair *sqlx.DB
 var mySQLConnectionData *MySQLConnectionEnv
+var mySQLChairConnectionData *MySQLConnectionEnv
 var chairSearchCondition ChairSearchCondition
 var estateSearchCondition EstateSearchCondition
 
@@ -217,6 +219,16 @@ func NewMySQLConnectionEnv() *MySQLConnectionEnv {
 	}
 }
 
+func NewChairMySQLConnectionEnv() *MySQLConnectionEnv {
+	return &MySQLConnectionEnv{
+		Host:     getEnv("MYSQL_CHAIR_HOST", "127.0.0.1"),
+		Port:     getEnv("MYSQL_PORT", "3306"),
+		User:     getEnv("MYSQL_USER", "isucon"),
+		DBName:   getEnv("MYSQL_DBNAME", "isuumo"),
+		Password: getEnv("MYSQL_PASS", "isucon"),
+	}
+}
+
 func getEnv(key, defaultValue string) string {
 	val := os.Getenv(key)
 	if val != "" {
@@ -297,6 +309,7 @@ func main() {
 	e.GET("/api/recommended_estate/:id", searchRecommendedEstateWithChair)
 
 	mySQLConnectionData = NewMySQLConnectionEnv()
+	mySQLChairConnectionData = NewChairMySQLConnectionEnv()
 
 	var err error
 	db, err = mySQLConnectionData.ConnectDB()
@@ -305,6 +318,13 @@ func main() {
 	}
 	db.SetMaxOpenConns(10)
 	defer db.Close()
+
+	dbChair, err = mySQLConnectionData.ConnectDB()
+	if err != nil {
+		e.Logger.Fatalf("DB connection failed : %v", err)
+	}
+	dbChair.SetMaxOpenConns(10)
+	defer dbChair.Close()
 
 	// Start server
 	serverPort := fmt.Sprintf(":%v", getEnv("SERVER_PORT", "1323"))
@@ -317,13 +337,12 @@ func initialize(c echo.Context) error {
 	_ = purgeChairIDsFromRedis()
 
 	sqlDir := filepath.Join("..", "mysql", "db")
-	paths := []string{
+	estatePaths := []string{
 		filepath.Join(sqlDir, "0_Schema.sql"),
 		filepath.Join(sqlDir, "1_DummyEstateData.sql"),
-		filepath.Join(sqlDir, "2_DummyChairData.sql"),
 	}
 
-	for _, p := range paths {
+	for _, p := range estatePaths {
 		sqlFile, _ := filepath.Abs(p)
 		cmdStr := fmt.Sprintf("mysql -h %v -u %v -p%v -P %v %v < %v",
 			mySQLConnectionData.Host,
@@ -339,6 +358,26 @@ func initialize(c echo.Context) error {
 		}
 	}
 
+	chairPaths := []string{
+		filepath.Join(sqlDir, "0_Schema.sql"),
+		filepath.Join(sqlDir, "2_DummyChairData.sql"),
+	}
+
+	for _, p := range chairPaths {
+		sqlFile, _ := filepath.Abs(p)
+		cmdStr := fmt.Sprintf("mysql -h %v -u %v -p%v -P %v %v < %v",
+			mySQLChairConnectionData.Host,
+			mySQLChairConnectionData.User,
+			mySQLChairConnectionData.Password,
+			mySQLChairConnectionData.Port,
+			mySQLChairConnectionData.DBName,
+			sqlFile,
+		)
+		if err := exec.Command("bash", "-c", cmdStr).Run(); err != nil {
+			c.Logger().Errorf("Initialize script error : %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+	}
 	return c.JSON(http.StatusOK, InitializeResponse{
 		Language: "go",
 	})
@@ -354,7 +393,7 @@ func getChairDetail(c echo.Context) error {
 
 	chair := Chair{}
 	query := `SELECT * FROM chair WHERE id = ?`
-	err = db.GetContext(ctx, &chair, query, id)
+	err = dbChair.GetContext(ctx, &chair, query, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.Echo().Logger.Infof("requested id's chair not found : %v", id)
@@ -388,7 +427,7 @@ func postChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	tx, err := db.Begin()
+	tx, err := dbChair.Begin()
 	if err != nil {
 		c.Logger().Errorf("failed to begin tx: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
@@ -480,7 +519,7 @@ func buyChair(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	tx, err := db.Beginx()
+	tx, err := dbChair.Beginx()
 	if err != nil {
 		c.Echo().Logger.Errorf("failed to create transaction : %v", err)
 		return c.NoContent(http.StatusInternalServerError)
@@ -531,7 +570,7 @@ func getLowPricedChair(c echo.Context) error {
 	ctx := c.Request().Context()
 	var chairs []Chair
 	query := `SELECT * FROM chair ORDER BY price ASC, id ASC LIMIT ?`
-	err := db.SelectContext(ctx, &chairs, query, Limit)
+	err := dbChair.SelectContext(ctx, &chairs, query, Limit)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.Logger().Error("getLowPricedChair not found")
@@ -801,7 +840,7 @@ func searchChairIDsFromMysql(ctx context.Context, priceRangeID string, heightRan
 	order := " ORDER BY popularity DESC, id ASC"
 
 	var ids []int64
-	err := db.SelectContext(ctx, &ids, searchQuery+searchCondition+order, params...)
+	err := dbChair.SelectContext(ctx, &ids, searchQuery+searchCondition+order, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -816,8 +855,8 @@ func searchChairsFromIDs(ctx context.Context, ids []int64) ([]Chair, error) {
 	// chair.popularity の index は必要そう
 	query, args, _ := sqlx.Named(`SELECT * FROM chair WHERE id IN (:ids) ORDER BY popularity DESC, id ASC`, arg)
 	query, args, _ = sqlx.In(query, args...)
-	query = db.Rebind(query)
-	err := db.SelectContext(ctx, &chairs, query, args...)
+	query = dbChair.Rebind(query)
+	err := dbChair.SelectContext(ctx, &chairs, query, args...)
 	return chairs, err
 }
 
@@ -940,7 +979,7 @@ func searchChairsWithoutCache(ctx context.Context, priceRangeID string, heightRa
 	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
 
 	var count int64
-	err := db.GetContext(ctx, &count, countQuery+searchCondition, params...)
+	err := dbChair.GetContext(ctx, &count, countQuery+searchCondition, params...)
 	if err != nil {
 		// c.Logger().Errorf("searchChairs DB execution error : %v", err)
 		return nil, 0, http.StatusInternalServerError
@@ -948,7 +987,7 @@ func searchChairsWithoutCache(ctx context.Context, priceRangeID string, heightRa
 
 	chairs := []Chair{}
 	params = append(params, limit, offset)
-	err = db.SelectContext(ctx, &chairs, searchQuery+searchCondition+limitOffset, params...)
+	err = dbChair.SelectContext(ctx, &chairs, searchQuery+searchCondition+limitOffset, params...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return chairs, 0, 0 // 200
@@ -1154,7 +1193,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 
 	chair := Chair{}
 	query := `SELECT * FROM chair WHERE id = ?`
-	err = db.GetContext(ctx, &chair, query, id)
+	err = dbChair.GetContext(ctx, &chair, query, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.Logger().Infof("Requested chair id \"%v\" not found", id)
