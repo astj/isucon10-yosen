@@ -21,9 +21,6 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
 	"github.com/labstack/gommon/log"
-	"github.com/newrelic/go-agent/v3/integrations/nrecho-v3"
-	_ "github.com/newrelic/go-agent/v3/integrations/nrmysql"
-	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 const Limit = 20
@@ -227,7 +224,7 @@ func getEnv(key, defaultValue string) string {
 //ConnectDB isuumoデータベースに接続する
 func (mc *MySQLConnectionEnv) ConnectDB() (*sqlx.DB, error) {
 	dsn := fmt.Sprintf("%v:%v@tcp(%v:%v)/%v", mc.User, mc.Password, mc.Host, mc.Port, mc.DBName)
-	return sqlx.Open("nrmysql", dsn)
+	return sqlx.Open("mysql", dsn)
 }
 
 func init() {
@@ -247,13 +244,6 @@ func init() {
 }
 
 func main() {
-	// newrelic
-	app, _ := newrelic.NewApplication(
-		newrelic.ConfigAppName(getEnv("NEWRELIC_APP_NAME", "isucon10-qualify")),
-		newrelic.ConfigLicense(os.Getenv("NEWRELIC_LICENSE_KEY")),
-		newrelic.ConfigDistributedTracerEnabled(true),
-	)
-
 	// redis
 	rdb = redis.NewClient(&redis.Options{
 		Addr: getEnv("REDIS_DSN", "localhost:6379"),
@@ -265,7 +255,6 @@ func main() {
 	e.Logger.SetLevel(log.DEBUG)
 
 	// Middleware
-	e.Use(nrecho.Middleware(app))
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
