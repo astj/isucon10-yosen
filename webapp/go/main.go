@@ -580,10 +580,19 @@ func buyChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	_, err = tx.ExecContext(ctx, "UPDATE chair SET stock = stock - 1 WHERE id = ?", id)
-	if err != nil {
-		c.Echo().Logger.Errorf("chair stock update failed : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	// 最後のひとつだったら chair を消します
+	if chair.Stock == 1 {
+		_, err = tx.ExecContext(ctx, "DELETE FROM chair WHERE id = ?", id)
+		if err != nil {
+			c.Echo().Logger.Errorf("chair stock delete failed : %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+	} else {
+		_, err = tx.ExecContext(ctx, "UPDATE chair SET stock = stock - 1 WHERE id = ?", id)
+		if err != nil {
+			c.Echo().Logger.Errorf("chair stock update failed : %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
 	}
 
 	err = tx.Commit()
