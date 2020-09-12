@@ -314,6 +314,7 @@ func main() {
 func initialize(c echo.Context) error {
 	// これから db の中身が変わるので redis の cache も吹き飛ばす
 	_ = purgeEstateIDsFromRedis()
+	_ = purgeChairIDsFromRedis()
 
 	sqlDir := filepath.Join("..", "mysql", "db")
 	paths := []string{
@@ -422,6 +423,9 @@ func postChair(c echo.Context) error {
 		c.Logger().Errorf("failed to commit tx: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
+	// estates が変わったら redis の cache は飛ばさないといけない
+	_ = purgeChairIDsFromRedis()
+
 	return c.NoContent(http.StatusCreated)
 }
 
@@ -442,7 +446,7 @@ func searchChairs(c echo.Context) error {
 
 	limit := int64(perPage)
 	offset := int64(page * perPage)
-	chairs, count, errStatusCode := searchChairsWithoutCache(ctx, c.QueryParam("priceRangeId"), c.QueryParam("heightRangeId"), c.QueryParam("widthRangeId"), c.QueryParam("depthRangeId"), c.QueryParam("kind"), c.QueryParam("color"), c.QueryParam("features"), limit, offset)
+	chairs, count, errStatusCode := searchChairsWithCache(ctx, c.QueryParam("priceRangeId"), c.QueryParam("heightRangeId"), c.QueryParam("widthRangeId"), c.QueryParam("depthRangeId"), c.QueryParam("kind"), c.QueryParam("color"), c.QueryParam("features"), limit, offset)
 
 	if errStatusCode != 0 {
 		return c.NoContent(errStatusCode)
@@ -632,6 +636,10 @@ func postEstate(c echo.Context) error {
 	return c.NoContent(http.StatusCreated)
 }
 
+func genChairCacheKey(priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string) string {
+	return strings.Join([]string{priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features}, "_")
+}
+
 func genCacheKey(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) string {
 	return strings.Join([]string{doorHeightRangeID, doorWidthRangeID, rentRangeID, features}, "_")
 }
@@ -669,6 +677,37 @@ func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int6
 	return res, length, nil
 }
 
+// getFromRedis は redis から取得する。
+// redis になかった場合は errCacheNotHit が帰ります
+func getChairIDsFromRedis(key string, limit int64, offset int64) ([]int64, int64, error) {
+	ctx := context.TODO()
+	// 全体の長さ
+	length, err := rdbChair.LLen(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, 0, errCacheNotHit
+		}
+		return nil, 0, err
+	}
+	if length == 0 {
+		return nil, 0, errCacheNotHit
+	}
+	val, err := rdbChair.LRange(ctx, key, offset, offset+limit-1).Result()
+	if err != nil {
+		// length があったならこっちがないことはないはず...
+		if err == redis.Nil {
+			return nil, 0, errCacheNotHit
+		}
+		return nil, 0, err
+	}
+	res := make([]int64, len(val))
+	for i, v := range val {
+		intVal, _ := strconv.Atoi(v)
+		res[i] = int64(intVal)
+	}
+	return res, length, nil
+}
+
 func putEstateIDsToRedis(key string, res []int64) error {
 	ctx := context.TODO()
 	if len(res) == 0 {
@@ -689,10 +728,36 @@ func putEstateIDsToRedis(key string, res []int64) error {
 	return err
 }
 
+func putChairIDsToRedis(key string, res []int64) error {
+	ctx := context.TODO()
+	if len(res) == 0 {
+		return nil
+	}
+	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
+	pipe := rdbChair.Pipeline()
+	pipe.Del(ctx, key)
+	idsStrSlice := make([]interface{}, len(res))
+	for i, v := range res {
+		idsStrSlice[i] = fmt.Sprintf("%d", v)
+	}
+	pipe.RPush(ctx, key, idsStrSlice...)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return err
+}
+
 // purgeFromRedis は入稿したときにキャッシュを全滅させる
 func purgeEstateIDsFromRedis() error {
 	ctx := context.TODO()
 	return rdbEstate.FlushDBAsync(ctx).Err()
+}
+
+// purgeFromRedis は入稿したときにキャッシュを全滅させる
+func purgeChairIDsFromRedis() error {
+	ctx := context.TODO()
+	return rdbChair.FlushDBAsync(ctx).Err()
 }
 
 // キャッシュに埋める用
@@ -719,6 +784,42 @@ func searchEstateIDsFromMysql(ctx context.Context, doorHeightRangeID string, doo
 	return ids, nil
 }
 
+func searchChairIDsFromMysql(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string) ([]int64, error) {
+	conditions, params, errStatusCode := makeChairConditions(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
+	if errStatusCode != 0 {
+		return nil, errors.New("failed")
+	}
+
+	if len(conditions) == 0 {
+		// c.Echo().Logger.Infof("searchEstates search condition not found")
+		return nil, errors.New("failed")
+	}
+
+	searchQuery := "SELECT id FROM estate WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	order := " ORDER BY popularity DESC, id ASC"
+
+	var ids []int64
+	err := db.SelectContext(ctx, &ids, searchQuery+searchCondition+order, params...)
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func searchChairsFromIDs(ctx context.Context, ids []int64) ([]Chair, error) {
+	var chairs []Chair
+	arg := map[string]interface{}{
+		"ids": ids,
+	}
+	// chair.popularity の index は必要そう
+	query, args, _ := sqlx.Named(`SELECT * FROM chair WHERE id IN (:ids) ORDER BY popularity DESC, id ASC`, arg)
+	query, args, _ = sqlx.In(query, args...)
+	query = db.Rebind(query)
+	err := db.SelectContext(ctx, &chairs, query, args...)
+	return chairs, err
+}
+
 func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
 	var estates []Estate
 	arg := map[string]interface{}{
@@ -730,6 +831,33 @@ func searchEstatesFromIDs(ctx context.Context, ids []int64) ([]Estate, error) {
 	query = db.Rebind(query)
 	err := db.SelectContext(ctx, &estates, query, args...)
 	return estates, err
+}
+
+func searchChairsWithCache(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string, limit int64, offset int64) ([]Chair, int64, int) {
+	key := genChairCacheKey(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
+
+	ids, count, err := getChairIDsFromRedis(key, limit, offset)
+	if err == errCacheNotHit {
+		chairs, count, errStatusCode := searchChairsWithoutCache(ctx, priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features, limit, offset)
+		// 非同期で cache を更新する
+		go func(key string) {
+			ctx := context.TODO()
+			ids, err := searchChairIDsFromMysql(ctx, priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
+			if err != nil {
+				fmt.Println(err)
+			}
+			putChairIDsToRedis(key, ids)
+		}(key)
+		return chairs, count, errStatusCode
+	}
+	if err != nil {
+		return nil, 0, http.StatusInternalServerError
+	}
+	chairs, err := searchChairsFromIDs(ctx, ids)
+	if err != nil {
+		return nil, 0, http.StatusInternalServerError
+	}
+	return chairs, count, 0
 }
 
 func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
@@ -793,6 +921,7 @@ func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, do
 	}
 	return estates, count, 0
 }
+
 func searchChairsWithoutCache(ctx context.Context, priceRangeID string, heightRangeID string, widthRangeID string, depthRangeID string, kind string, color string, features string, limit int64, offset int64) ([]Chair, int64, int) {
 	conditions, params, errStatusCode := makeChairConditions(priceRangeID, heightRangeID, widthRangeID, depthRangeID, kind, color, features)
 	if errStatusCode != 0 {
