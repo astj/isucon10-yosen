@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -723,6 +725,57 @@ func postEstate(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	return c.NoContent(http.StatusCreated)
+}
+
+func genCacheKey(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) string {
+	return strings.Join([]string{doorHeightRangeID, doorWidthRangeID, rentRangeID, features}, "_")
+}
+
+var errCacheNotHit = errors.New("cache not hit")
+
+// getFromRedis は redis から取得する。
+// redis になかった場合は errCacheNotHit が帰ります
+func getEstateIDsFromRedis(key string, limit int, offset int) ([]int64, int64, error) {
+	ctx := context.TODO()
+	// 全体の長さ
+	length, err := rdb.LLen(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, 0, errCacheNotHit
+		}
+		return nil, 0, err
+	}
+	val, err := rdb.LRange(ctx, key, int64(offset), int64(offset+limit-1)).Result()
+	if err != nil {
+		// length があったならこっちがないことはないはず...
+		if err == redis.Nil {
+			return nil, 0, errCacheNotHit
+		}
+		return nil, 0, err
+	}
+	res := make([]int64, len(val))
+	for i, v := range val {
+		intVal, _ := strconv.Atoi(v)
+		res[i] = int64(intVal)
+	}
+	return res, length, nil
+}
+
+func putEstateIDsToRedis(key string, res []int64) error {
+	ctx := context.TODO()
+	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
+	pipe := rdb.Pipeline()
+	pipe.Del(ctx, key)
+	// XXX これ []string にしないと通らないかも
+	pipe.RPush(ctx, key, res)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// purgeFromRedis は入稿したときにキャッシュを全滅させる
+func purgeEstateIDsFromRedis() error {
+	ctx := context.TODO()
+	return rdb.FlushAll(ctx).Err()
 }
 
 func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]string, []interface{}, int) {
