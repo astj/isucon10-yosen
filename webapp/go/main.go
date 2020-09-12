@@ -1210,7 +1210,7 @@ func searchEstateNazotte(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	for _, e := range es {
-		if e.Latitude <= b.BottomRightCorner.Latitude && e.Latitude >= b.TopLeftCorner.Latitude && e.Longitude <= b.BottomRightCorner.Longitude && e.Longitude >= b.TopLeftCorner.Longitude {
+		if e.Latitude <= b.BottomRightCorner.Latitude && e.Latitude <= b.TopLeftCorner.Latitude && e.Longitude <= b.BottomRightCorner.Longitude && e.Longitude <= b.TopLeftCorner.Longitude {
 			estatesInBoundingBox = append(estatesInBoundingBox, e)
 		}
 	}
