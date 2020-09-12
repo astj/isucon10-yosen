@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
@@ -29,6 +30,8 @@ var db *sqlx.DB
 var mySQLConnectionData *MySQLConnectionEnv
 var chairSearchCondition ChairSearchCondition
 var estateSearchCondition EstateSearchCondition
+
+var rdb *redis.Client
 
 type InitializeResponse struct {
 	Language string `json:"language"`
@@ -247,6 +250,11 @@ func main() {
 		newrelic.ConfigLicense(os.Getenv("NEWRELIC_LICENSE_KEY")),
 		newrelic.ConfigDistributedTracerEnabled(true),
 	)
+
+	// redis
+	rdb = redis.NewClient(&redis.Options{
+		Addr: getEnv("REDIS_DSN", "localhost:6379"),
+	})
 
 	// Echo instance
 	e := echo.New()
