@@ -905,6 +905,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 	fmt.Println("new query: ", len(estates))
+	estates = make([]Estate, 0)
 
 	w := chair.Width
 	h := chair.Height
