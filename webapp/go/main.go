@@ -844,7 +844,6 @@ func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorW
 	if err != nil {
 		return nil, 0, http.StatusInternalServerError
 	}
-	// XXX
 	return estates, count, 0
 }
 
