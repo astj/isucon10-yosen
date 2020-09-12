@@ -735,7 +735,7 @@ var errCacheNotHit = errors.New("cache not hit")
 
 // getFromRedis は redis から取得する。
 // redis になかった場合は errCacheNotHit が帰ります
-func getEstateIDsFromRedis(key string, limit int, offset int) ([]int64, int64, error) {
+func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int64, error) {
 	ctx := context.TODO()
 	// 全体の長さ
 	length, err := rdb.LLen(ctx, key).Result()
@@ -745,7 +745,7 @@ func getEstateIDsFromRedis(key string, limit int, offset int) ([]int64, int64, e
 		}
 		return nil, 0, err
 	}
-	val, err := rdb.LRange(ctx, key, int64(offset), int64(offset+limit-1)).Result()
+	val, err := rdb.LRange(ctx, key, offset, offset+limit-1).Result()
 	if err != nil {
 		// length があったならこっちがないことはないはず...
 		if err == redis.Nil {
