@@ -877,12 +877,22 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
+	var ids []string
+	dwh := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Height), 2))
+	dwd := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Depth), 2))
+	dhd := int(math.Pow(float64(chair.Height), 2) + math.Pow(float64(chair.Depth), 2))
+	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ?) OR (d >= ? ) OR (d >= ?)`
+	err = db.SelectContext(ctx, &ids, query, dwh, dwd, dhd)
+
 	var estates []Estate
-	w := chair.Width
-	h := chair.Height
-	d := chair.Depth
-	query = `SELECT * FROM estate WHERE (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) ORDER BY popularity DESC, id ASC LIMIT ?`
-	err = db.SelectContext(ctx, &estates, query, w, h, w, d, h, w, h, d, d, w, d, h, Limit)
+	arg := map[string]interface{}{
+		"ids":   ids,
+		"limit": Limit,
+	}
+	query, args, _ := sqlx.Named(`SELECT * FROM estate IN (:ids) ORDER BY popularity DESC, id ASC LIMIT :limit`, arg)
+	query, args, _ = sqlx.In(query, args...)
+	query = db.Rebind(query)
+	err = db.SelectContext(ctx, &estates, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.JSON(http.StatusOK, EstateListResponse{[]Estate{}})
