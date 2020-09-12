@@ -21,6 +21,8 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
 	"github.com/labstack/gommon/log"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 const Limit = 20
