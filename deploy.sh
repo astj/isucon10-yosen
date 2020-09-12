@@ -1,5 +1,6 @@
 git pull origin main
 cd /home/isuumo/webapp/go
+systemctl stop isuumo.go.service
 make all
-systemctl reload isuumo.go.service
+systemctl restart isuumo.go.service
 systemctl reload nginx
