@@ -34,7 +34,7 @@ var mySQLConnectionData *MySQLConnectionEnv
 var chairSearchCondition ChairSearchCondition
 var estateSearchCondition EstateSearchCondition
 
-var rdb *redis.Client
+var rdbEstate *redis.Client
 
 type InitializeResponse struct {
 	Language string `json:"language"`
@@ -255,8 +255,9 @@ func main() {
 	)
 
 	// redis
-	rdb = redis.NewClient(&redis.Options{
+	rdbEstate = redis.NewClient(&redis.Options{
 		Addr: getEnv("REDIS_DSN", "localhost:6379"),
+		DB:   0,
 	})
 
 	// Echo instance
@@ -744,7 +745,7 @@ var errCacheNotHit = errors.New("cache not hit")
 func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int64, error) {
 	ctx := context.TODO()
 	// 全体の長さ
-	length, err := rdb.LLen(ctx, key).Result()
+	length, err := rdbEstate.LLen(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, 0, errCacheNotHit
@@ -754,7 +755,7 @@ func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int6
 	if length == 0 {
 		return nil, 0, errCacheNotHit
 	}
-	val, err := rdb.LRange(ctx, key, offset, offset+limit-1).Result()
+	val, err := rdbEstate.LRange(ctx, key, offset, offset+limit-1).Result()
 	if err != nil {
 		// length があったならこっちがないことはないはず...
 		if err == redis.Nil {
@@ -776,7 +777,7 @@ func putEstateIDsToRedis(key string, res []int64) error {
 		return nil
 	}
 	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
-	pipe := rdb.Pipeline()
+	pipe := rdbEstate.Pipeline()
 	pipe.Del(ctx, key)
 	idsStrSlice := make([]interface{}, len(res))
 	for i, v := range res {
@@ -793,7 +794,7 @@ func putEstateIDsToRedis(key string, res []int64) error {
 // purgeFromRedis は入稿したときにキャッシュを全滅させる
 func purgeEstateIDsFromRedis() error {
 	ctx := context.TODO()
-	return rdb.FlushAllAsync(ctx).Err()
+	return rdbEstate.FlushAllAsync(ctx).Err()
 }
 
 // キャッシュに埋める用
