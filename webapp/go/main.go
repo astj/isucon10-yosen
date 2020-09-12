@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -397,6 +398,14 @@ func postChair(c echo.Context) error {
 			c.Logger().Errorf("failed to insert chair: %v", err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
+		w := int(math.Pow(float64(width), 2.0))
+		h := int(math.Pow(float64(height), 2.0))
+		d := int(math.Pow(float64(depth), 2.0))
+		_, err = tx.Exec("INSERT INTO chair_metrics(chair_id, dwh_p, dwd_p, dhd_p) VALUES(?,?,?,?)", id, w+h, w+d, h+d)
+		if err != nil {
+			c.Logger().Errorf("failed to insert chair: %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		c.Logger().Errorf("failed to commit tx: %v", err)
@@ -705,6 +714,12 @@ func postEstate(c echo.Context) error {
 			return c.NoContent(http.StatusBadRequest)
 		}
 		_, err := tx.Exec("INSERT INTO estate(id, name, description, thumbnail, address, latitude, longitude, rent, door_height, door_width, features, popularity) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", id, name, description, thumbnail, address, latitude, longitude, rent, doorHeight, doorWidth, features, popularity)
+		if err != nil {
+			c.Logger().Errorf("failed to insert estate: %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		d := int(math.Pow(float64(doorWidth), 2) + math.Pow(float64(doorHeight), 2))
+		_, err = tx.Exec("INSERT INTO estate_metrics(estate_id, d) VALUES(?,?)", id, d)
 		if err != nil {
 			c.Logger().Errorf("failed to insert estate: %v", err)
 			return c.NoContent(http.StatusInternalServerError)
