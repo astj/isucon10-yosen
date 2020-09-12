@@ -771,6 +771,9 @@ func getEstateIDsFromRedis(key string, limit int64, offset int64) ([]int64, int6
 
 func putEstateIDsToRedis(key string, res []int64) error {
 	ctx := context.TODO()
+	if len(res) == 0 {
+		return nil
+	}
 	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
 	pipe := rdb.Pipeline()
 	pipe.Del(ctx, key)
