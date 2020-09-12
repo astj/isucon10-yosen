@@ -1,4 +1,4 @@
-cd /home/isuumo/webapp/go
+cd /home/isucon/isuumo/webapp/go
 git pull origin main
 systemctl stop isuumo.go.service
 make all
