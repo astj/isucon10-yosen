@@ -795,7 +795,7 @@ func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, do
 	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
 
 	var count int64
-	err := db.GetContext(ctx, count, countQuery+searchCondition, params...)
+	err := db.GetContext(ctx, &count, countQuery+searchCondition, params...)
 	if err != nil {
 		// c.Logger().Errorf("searchEstates DB execution error : %v", err)
 		return nil, 0, http.StatusInternalServerError
