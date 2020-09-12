@@ -888,7 +888,7 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 	swd := chair.Width + chair.Depth
 	dhd := int(math.Pow(float64(chair.Height), 2) + math.Pow(float64(chair.Depth), 2))
 	shd := chair.Height * chair.Depth
-	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ? AND s <= ?) OR (d >= ? AND s <= ?) OR (d >= ? AND s <= ?)`
+	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ? AND s >= ?) OR (d >= ? AND s >= ?) OR (d >= ? AND s >= ?)`
 	err = db.SelectContext(ctx, &ids, query, dwh, swh, dwd, swd, dhd, shd)
 
 	fmt.Println("estate_id_count: ", len(ids))
