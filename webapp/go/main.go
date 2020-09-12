@@ -305,6 +305,9 @@ func main() {
 }
 
 func initialize(c echo.Context) error {
+	// これから db の中身が変わるので redis の cache も吹き飛ばす
+	_ = purgeEstateIDsFromRedis()
+
 	sqlDir := filepath.Join("..", "mysql", "db")
 	paths := []string{
 		filepath.Join(sqlDir, "0_Schema.sql"),
@@ -724,6 +727,8 @@ func postEstate(c echo.Context) error {
 		c.Logger().Errorf("failed to commit tx: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
+	// estates が変わったら redis の cache は飛ばさないといけない
+	_ = purgeEstateIDsFromRedis()
 	return c.NoContent(http.StatusCreated)
 }
 
@@ -775,7 +780,7 @@ func putEstateIDsToRedis(key string, res []int64) error {
 // purgeFromRedis は入稿したときにキャッシュを全滅させる
 func purgeEstateIDsFromRedis() error {
 	ctx := context.TODO()
-	return rdb.FlushAll(ctx).Err()
+	return rdb.FlushAllAsync(ctx).Err()
 }
 
 // キャッシュに埋める用
