@@ -777,6 +777,9 @@ func putEstateIDsToRedis(key string, res []int64) error {
 	// XXX これ []string にしないと通らないかも
 	pipe.RPush(ctx, key, res)
 	_, err := pipe.Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+	}
 	return err
 }
 
