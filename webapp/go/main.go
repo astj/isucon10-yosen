@@ -824,7 +824,7 @@ func searchEstatesWithCache(ctx context.Context, doorHeightRangeID string, doorW
 	key := genCacheKey(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
 	ids, count, err := getEstateIDsFromRedis(key, limit, offset)
 	if err == errCacheNotHit {
-		estates, count, errStatusCode := searchEstatesWithCache(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features, limit, offset)
+		estates, count, errStatusCode := searchEstatesWithoutCache(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features, limit, offset)
 		// 非同期で cache を更新する
 		go func(key string) {
 			ids, err := searchEstateIDsFromMysql(ctx, doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
