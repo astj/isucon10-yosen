@@ -777,8 +777,12 @@ func putEstateIDsToRedis(key string, res []int64) error {
 	// del と rpush を atomic に行う (書き込み競合しても長さが2倍になったりしないはず)
 	pipe := rdb.Pipeline()
 	pipe.Del(ctx, key)
-	// XXX これ []string にしないと通らないかも
-	pipe.RPush(ctx, key, res)
+	idsStrSlice := make([]interface{}, len(res))
+	for i, v := range res {
+		idsStrSlice[i] = fmt.Sprintf("%d", v)
+	}
+	fmt.Println(idsStrSlice...)
+	pipe.RPush(ctx, key, idsStrSlice...)
 	_, err := pipe.Exec(ctx)
 	if err != nil {
 		fmt.Println(err)
