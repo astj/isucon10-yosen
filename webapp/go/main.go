@@ -883,9 +883,9 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 
 	var ids []int64
 	dwh := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Height), 2))
-	swh := chair.Width + chair.Height
+	swh := chair.Width * chair.Height
 	dwd := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Depth), 2))
-	swd := chair.Width + chair.Depth
+	swd := chair.Width * chair.Depth
 	dhd := int(math.Pow(float64(chair.Height), 2) + math.Pow(float64(chair.Depth), 2))
 	shd := chair.Height * chair.Depth
 	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ? AND s >= ?) OR (d >= ? AND s >= ?) OR (d >= ? AND s >= ?)`
