@@ -35,6 +35,7 @@ var chairSearchCondition ChairSearchCondition
 var estateSearchCondition EstateSearchCondition
 
 var rdbEstate *redis.Client
+var rdbChair *redis.Client
 
 type InitializeResponse struct {
 	Language string `json:"language"`
@@ -258,6 +259,10 @@ func main() {
 	rdbEstate = redis.NewClient(&redis.Options{
 		Addr: getEnv("REDIS_DSN", "localhost:6379"),
 		DB:   0,
+	})
+	rdbChair = redis.NewClient(&redis.Options{
+		Addr: getEnv("REDIS_DSN", "localhost:6379"),
+		DB:   1,
 	})
 
 	// Echo instance
