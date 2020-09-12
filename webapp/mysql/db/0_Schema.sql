@@ -43,3 +43,30 @@ CREATE TABLE isuumo.chair
 
 create index `idx_chair_price_popularity` on isuumo.chair (`price`, `popularity`);
 create index `idx_chair_price_id` on isuumo.chair (`price`, `id`);
+create index `idx_chair_price` on isuumo.chair (`price`);
+
+-- ドアと椅子の大きさを持っておく
+
+CREATE TABLE isuumo.estate_metrics
+(
+    id INTEGER NOT NULL AUTO_INCREMENT,
+    estate_id INTEGER NOT NULL,
+    -- door_width^2 + door_height^2
+    d INTEGER NOT NULL,
+
+    PRIMARY KEY (id)
+);
+
+CREATE TABLE isuumo.chair_metrics
+(
+    id INTEGER NOT NULL AUTO_INCREMENT,
+    chair_id INTEGER NOT NULL,
+    -- width^2 + height^2
+    dwh_p INTEGER NOT NULL,
+    -- width^2 + depth^2
+    dwd_p INTEGER NOT NULL,
+    -- height^2 + depth^2
+    dhd_p INTEGER NOT NULL,
+
+    PRIMARY KEY (id)
+);

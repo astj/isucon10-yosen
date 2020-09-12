@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -300,6 +301,8 @@ func initialize(c echo.Context) error {
 		filepath.Join(sqlDir, "0_Schema.sql"),
 		filepath.Join(sqlDir, "1_DummyEstateData.sql"),
 		filepath.Join(sqlDir, "2_DummyChairData.sql"),
+		filepath.Join(sqlDir, "3_ChairMetrics.sql"),
+		filepath.Join(sqlDir, "4_EstateMetrics.sql"),
 	}
 
 	for _, p := range paths {
@@ -393,6 +396,14 @@ func postChair(c echo.Context) error {
 			return c.NoContent(http.StatusBadRequest)
 		}
 		_, err := tx.Exec("INSERT INTO chair(id, name, description, thumbnail, price, height, width, depth, color, features, kind, popularity, stock) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", id, name, description, thumbnail, price, height, width, depth, color, features, kind, popularity, stock)
+		if err != nil {
+			c.Logger().Errorf("failed to insert chair: %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		w := int(math.Pow(float64(width), 2.0))
+		h := int(math.Pow(float64(height), 2.0))
+		d := int(math.Pow(float64(depth), 2.0))
+		_, err = tx.Exec("INSERT INTO chair_metrics(chair_id, dwh_p, dwd_p, dhd_p) VALUES(?,?,?,?)", id, w+h, w+d, h+d)
 		if err != nil {
 			c.Logger().Errorf("failed to insert chair: %v", err)
 			return c.NoContent(http.StatusInternalServerError)
@@ -709,6 +720,12 @@ func postEstate(c echo.Context) error {
 			c.Logger().Errorf("failed to insert estate: %v", err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
+		d := int(math.Pow(float64(doorWidth), 2) + math.Pow(float64(doorHeight), 2))
+		_, err = tx.Exec("INSERT INTO estate_metrics(estate_id, d) VALUES(?,?)", id, d)
+		if err != nil {
+			c.Logger().Errorf("failed to insert estate: %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		c.Logger().Errorf("failed to commit tx: %v", err)
@@ -862,12 +879,22 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
+	var ids []string
+	dwh := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Height), 2))
+	dwd := int(math.Pow(float64(chair.Width), 2) + math.Pow(float64(chair.Depth), 2))
+	dhd := int(math.Pow(float64(chair.Height), 2) + math.Pow(float64(chair.Depth), 2))
+	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ?) OR (d >= ? ) OR (d >= ?)`
+	err = db.SelectContext(ctx, &ids, query, dwh, dwd, dhd)
+
 	var estates []Estate
-	w := chair.Width
-	h := chair.Height
-	d := chair.Depth
-	query = `SELECT * FROM estate WHERE (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) ORDER BY popularity DESC, id ASC LIMIT ?`
-	err = db.SelectContext(ctx, &estates, query, w, h, w, d, h, w, h, d, d, w, d, h, Limit)
+	arg := map[string]interface{}{
+		"ids":   ids,
+		"limit": Limit,
+	}
+	query, args, _ := sqlx.Named(`SELECT * FROM estate WHERE id IN (:ids) ORDER BY popularity DESC, id ASC LIMIT :limit`, arg)
+	query, args, _ = sqlx.In(query, args...)
+	query = db.Rebind(query)
+	err = db.SelectContext(ctx, &estates, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.JSON(http.StatusOK, EstateListResponse{[]Estate{}})
