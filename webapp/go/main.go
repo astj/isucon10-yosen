@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -863,11 +864,14 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 	}
 
 	var estates []Estate
-	w := chair.Width
-	h := chair.Height
-	d := chair.Depth
-	query = `SELECT * FROM estate WHERE (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) ORDER BY popularity DESC, id ASC LIMIT ?`
-	err = db.SelectContext(ctx, &estates, query, w, h, w, d, h, w, h, d, d, w, d, h, Limit)
+	lengths := []int64{chair.Width, chair.Height, chair.Depth}
+	sort.Slice(lengths, func(i, j int) bool {
+		return lengths[i] < lengths[j]
+	})
+	m1, m2 := lengths[0], lengths[1]
+
+	query = `SELECT * FROM estate WHERE (door_width >= ? AND door_height >= ?) OR (door_width >= ? AND door_height >= ?) ORDER BY popularity DESC, id ASC LIMIT ?`
+	err = db.SelectContext(ctx, &estates, query, m1, m2, m2, m1, Limit)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.JSON(http.StatusOK, EstateListResponse{[]Estate{}})
