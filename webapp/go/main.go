@@ -778,6 +778,42 @@ func purgeEstateIDsFromRedis() error {
 	return rdb.FlushAll(ctx).Err()
 }
 
+func searchEstatesWithoutCache(ctx context.Context, doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string, limit int64, offset int64) ([]Estate, int64, int) {
+	conditions, params, errStatusCode := makeEstateConditions(doorHeightRangeID, doorWidthRangeID, rentRangeID, features)
+	if errStatusCode != 0 {
+		return nil, 0, errStatusCode
+	}
+
+	if len(conditions) == 0 {
+		// c.Echo().Logger.Infof("searchEstates search condition not found")
+		return nil, 0, http.StatusBadRequest
+	}
+
+	searchQuery := "SELECT * FROM estate WHERE "
+	countQuery := "SELECT COUNT(*) FROM estate WHERE "
+	searchCondition := strings.Join(conditions, " AND ")
+	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
+
+	var count int64
+	err := db.GetContext(ctx, count, countQuery+searchCondition, params...)
+	if err != nil {
+		// c.Logger().Errorf("searchEstates DB execution error : %v", err)
+		return nil, 0, http.StatusInternalServerError
+	}
+
+	estates := []Estate{}
+	params = append(params, limit, offset)
+	err = db.SelectContext(ctx, &estates, searchQuery+searchCondition+limitOffset, params...)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return estates, 0, 0 // 200
+		}
+		// c.Logger().Errorf("searchEstates DB execution error : %v", err)
+		return nil, 0, http.StatusInternalServerError
+	}
+	return estates, count, 0
+}
+
 func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, rentRangeID string, features string) ([]string, []interface{}, int) {
 	conditions := make([]string, 0)
 	params := make([]interface{}, 0)
@@ -845,19 +881,6 @@ func makeEstateConditions(doorHeightRangeID string, doorWidthRangeID string, ren
 func searchEstates(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	conditions, params, errorCode := makeEstateConditions(
-		c.QueryParam("doorHeightRangeId"), c.QueryParam("doorWidthRangeId"), c.QueryParam("rentRangeId"), c.QueryParam("features"),
-	)
-
-	if errorCode != 0 {
-		return c.NoContent(errorCode)
-	}
-
-	if len(conditions) == 0 {
-		c.Echo().Logger.Infof("searchEstates search condition not found")
-		return c.NoContent(http.StatusBadRequest)
-	}
-
 	page, err := strconv.Atoi(c.QueryParam("page"))
 	if err != nil {
 		c.Logger().Infof("Invalid format page parameter : %v", err)
@@ -870,30 +893,18 @@ func searchEstates(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	searchQuery := "SELECT * FROM estate WHERE "
-	countQuery := "SELECT COUNT(*) FROM estate WHERE "
-	searchCondition := strings.Join(conditions, " AND ")
-	limitOffset := " ORDER BY popularity DESC, id ASC LIMIT ? OFFSET ?"
+	limit := int64(perPage)
+	offset := int64(page * perPage)
+	estates, count, errStatusCode := searchEstatesWithoutCache(ctx, c.QueryParam("doorHeightRangeId"), c.QueryParam("doorWidthRangeId"), c.QueryParam("rentRangeId"), c.QueryParam("features"), limit, offset)
 
-	var res EstateSearchResponse
-	err = db.GetContext(ctx, &res.Count, countQuery+searchCondition, params...)
-	if err != nil {
-		c.Logger().Errorf("searchEstates DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	if errStatusCode != 0 {
+		return c.NoContent(errStatusCode)
 	}
 
-	estates := []Estate{}
-	params = append(params, perPage, page*perPage)
-	err = db.SelectContext(ctx, &estates, searchQuery+searchCondition+limitOffset, params...)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return c.JSON(http.StatusOK, EstateSearchResponse{Count: 0, Estates: []Estate{}})
-		}
-		c.Logger().Errorf("searchEstates DB execution error : %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	res := EstateSearchResponse{
+		Estates: estates,
+		Count:   count,
 	}
-
-	res.Estates = estates
 
 	return c.JSON(http.StatusOK, res)
 }
