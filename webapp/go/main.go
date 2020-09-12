@@ -886,6 +886,8 @@ func searchRecommendedEstateWithChair(c echo.Context) error {
 	query = `SELECT estate_id FROM estate_metrics WHERE (d >= ?) OR (d >= ? ) OR (d >= ?)`
 	err = db.SelectContext(ctx, &ids, query, dwh, dwd, dhd)
 
+	fmt.Println("estate_id_count: ", len(ids))
+
 	var estates []Estate
 	arg := map[string]interface{}{
 		"ids":   ids,
