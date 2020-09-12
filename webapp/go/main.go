@@ -505,6 +505,7 @@ func buyChair(c echo.Context) error {
 			c.Echo().Logger.Errorf("chair stock delete failed : %v", err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
+		_ = purgeChairIDsFromRedis()
 	} else {
 		_, err = tx.ExecContext(ctx, "UPDATE chair SET stock = stock - 1 WHERE id = ?", id)
 		if err != nil {
